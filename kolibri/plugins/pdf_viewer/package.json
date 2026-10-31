@@ -13,7 +13,7 @@
     "kolibri-logging": "workspace:*",
     "kolibri-viewer": "workspace:*",
     "lodash": "catalog:",
-    "pdfjs-dist": "^2.16.105",
+    "pdfjs-dist": "^6.4.299",
     "scrollparent": "^2.1.0",
     "vue": "catalog:",
     "vue-observe-visibility": "^1.0.0",
