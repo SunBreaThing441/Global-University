@@ -104,7 +104,7 @@
     "tippy.js": "^6.3.7",
     "ua-parser-js": "^1.0.41",
     "vue": "catalog:",
-    "vue-intl": "3.1.0",
+    "vue-intl": "8.1.4",
     "vue-meta": "catalog:",
     "vue-router": "catalog:"
   },
