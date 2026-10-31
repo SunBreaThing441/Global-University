@@ -95,7 +95,7 @@ base = [
     "colorama==0.4.6",
     "whitenoise==5.3.0",
     "idna==3.7",
-    "ifaddr==0.1.7",
+    "ifaddr==0.2.0",
     "importlib-metadata==4.8.3",
     "importlib_resources==5.4.0",
     "json-schema-validator==2.4.1",
