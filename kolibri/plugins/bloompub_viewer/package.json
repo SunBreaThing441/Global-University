@@ -1,0 +1,14 @@
+{
+    "name": "kolibri-bloompub-viewer-plugin",
+    "description": "Bloompub Viewer Plugin for Kolibri",
+    "private": true,
+    "version": "0.0.1",
+    "dependencies": {
+        "core-js": "catalog:",
+        "kolibri": "workspace:*",
+        "kolibri-sandbox": "workspace:*",
+        "kolibri-viewer": "workspace:*",
+        "kolibri-zip": "workspace:*",
+        "web-streams-polyfill": "catalog:"
+    }
+}

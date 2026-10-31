@@ -1,0 +1,47 @@
+{
+  "name": "kolibri-sandbox",
+  "version": "0.1.0",
+  "description": "A library for providing a secure sandbox environment for Kolibri.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/learningequality/kolibri.git",
+    "directory": "packages/kolibri-sandbox"
+  },
+  "main": "src/mainClient.js",
+  "exports": {
+    ".": "./src/mainClient.js",
+    "./SandboxHandler": "./src/SandboxHandler.js",
+    "./SandboxShim": "./src/SandboxShim.js",
+    "./base": "./src/base.js",
+    "./mediator": "./src/mediator.js"
+  },
+  "scripts": {
+    "build-base": "webpack --config ./webpack.config.js",
+    "build": "pnpm build-base --mode=production",
+    "dev": "pnpm build-base --mode=development --watch",
+    "compat": "eslint -c ./compat.js ./src/*.js"
+  },
+  "author": "Learning Equality",
+  "license": "MIT",
+  "devDependencies": {
+    "@babel/core": "^8.0.6",
+    "@babel/preset-env": "^8.0.6",
+    "babel-loader": "^10.1.1",
+    "babel-plugin-polyfill-corejs3": "^1.0.0",
+    "browserslist-config-kolibri": "workspace:*",
+    "css-minimizer-webpack-plugin": "8.0.0",
+    "eslint-plugin-compat": "^6.0.2",
+    "html-webpack-plugin": "5.6.5",
+    "mutationobserver-shim": "^0.3.7",
+    "terser-webpack-plugin": "^5.3.14",
+    "webpack": "^5.109.2",
+    "webpack-cli": "^7.0.2"
+  },
+  "dependencies": {
+    "core-js": "catalog:",
+    "uuid": "^14.0.2"
+  },
+  "browserslist": [
+    "extends browserslist-config-kolibri"
+  ]
+}

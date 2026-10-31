@@ -1,0 +1,971 @@
+<template>
+
+  <EmbeddedReadCard
+    :active="mobileEmbedded"
+    @read="$refs.epubViewer.toggleFullscreen()"
+  >
+    <Fullscreen
+      ref="epubViewer"
+      class="epub-viewer"
+      :class="{ small: windowIsSmall, scrolled: scrolled, 'no-bottom-bar': mobileEmbedded }"
+      :style="epubViewerStyle"
+      @changeFullscreen="isInFullscreen = $event"
+    >
+      <LoadingError
+        v-if="errorLoading"
+        :loaded="loaded"
+      />
+
+      <LoadingScreen v-else-if="!loaded" />
+
+      <TopBar
+        v-if="!mobileEmbedded"
+        ref="topBar"
+        class="top-bar-component"
+        :isInFullscreen="isInFullscreen"
+        @tableOfContentsButtonClicked="handleTocToggle"
+        @settingsButtonClicked="handleSettingToggle"
+        @searchButtonClicked="handleSearchToggle"
+        @fullscreenButtonClicked="$refs.epubViewer.toggleFullscreen()"
+      />
+
+      <div
+        class="epub-viewer-content"
+        role="presentation"
+        :style="{ 'border-color': 'var(--tokens-fineLine)' }"
+        :dir="contentDirection"
+        @mousedown.stop="handleMouseDown"
+        @keyup.esc="closeSideBar"
+      >
+        <FocusLock
+          :disabled="!tocSideBarIsOpen"
+          :returnFocus="true"
+        >
+          <TableOfContentsSideBar
+            v-show="tocSideBarIsOpen"
+            ref="tocSideBar"
+            :toc="toc"
+            :currentSection="currentSection"
+            class="side-bar side-bar-left"
+            @tocNavigation="handleTocNavigation"
+          />
+        </FocusLock>
+
+        <FocusLock
+          :disabled="!settingsSideBarIsOpen"
+          :returnFocus="false"
+        >
+          <SettingsSideBar
+            v-show="settingsSideBarIsOpen"
+            ref="settingsSideBar"
+            class="side-bar side-bar-right"
+            :theme="theme"
+            :decreaseFontSizeDisabled="decreaseFontSizeDisabled"
+            :increaseFontSizeDisabled="increaseFontSizeDisabled"
+            @decreaseFontSize="handleChangeFontSize(-1)"
+            @increaseFontSize="handleChangeFontSize(+1)"
+            @setTheme="setTheme"
+            @closeSideBar="handleSettingToggle"
+          />
+        </FocusLock>
+
+        <FocusLock
+          :disabled="!searchSideBarIsOpen"
+          :returnFocus="false"
+        >
+          <SearchSideBar
+            v-show="searchSideBarIsOpen"
+            ref="searchSideBar"
+            class="side-bar side-bar-right"
+            :book="book"
+            @newSearchQuery="handleNewSearchQuery"
+            @navigateToSearchResult="handleNavigateToSearchResult"
+          />
+        </FocusLock>
+
+        <div
+          class="navigation-and-epubjs"
+          :style="{ backgroundColor }"
+        >
+          <div
+            v-show="!mobileEmbedded"
+            class="column epubjs-navigation"
+          >
+            <NextButton
+              v-if="contentIsRtl"
+              v-show="!isAtEnd"
+              :disabled="!locationsAreReady"
+              :color="navigationButtonColor"
+              :isRtl="contentIsRtl"
+              :style="{ backgroundColor }"
+              @goToNextPage="goToNextPage"
+            />
+            <PreviousButton
+              v-else
+              v-show="!isAtStart"
+              :disabled="!locationsAreReady"
+              :color="navigationButtonColor"
+              :isRtl="contentIsRtl"
+              :style="{ backgroundColor }"
+              @goToPreviousPage="goToPreviousPage"
+            />
+          </div>
+          <div
+            ref="epubjsContainer"
+            class="column epubjs-parent"
+            :style="{ backgroundColor }"
+          ></div>
+          <div
+            v-show="!mobileEmbedded"
+            class="column epubjs-navigation"
+          >
+            <PreviousButton
+              v-if="contentIsRtl"
+              v-show="!isAtStart"
+              :disabled="!locationsAreReady"
+              :color="navigationButtonColor"
+              :isRtl="contentIsRtl"
+              :style="{ backgroundColor }"
+              @goToPreviousPage="goToPreviousPage"
+            />
+            <NextButton
+              v-else
+              v-show="!isAtEnd"
+              :disabled="!locationsAreReady"
+              :color="navigationButtonColor"
+              :isRtl="contentIsRtl"
+              :style="{ backgroundColor }"
+              @goToNextPage="goToNextPage"
+            />
+          </div>
+        </div>
+
+        <BottomBar
+          v-show="!mobileEmbedded"
+          class="bottom-bar"
+          :locationsAreReady="locationsAreReady"
+          :heading="bottomBarHeading"
+          :sliderValue="sliderValue"
+          :sliderStep="sliderStep"
+          :relocationCount="relocationCount"
+          @sliderChanged="handleSliderChanged"
+        />
+      </div>
+    </Fullscreen>
+  </EmbeddedReadCard>
+
+</template>
+
+
+<script>
+
+  import Epub from 'epubjs/src/epub';
+  import { EVENTS } from 'epubjs/src/utils/constants';
+  import Mark from 'mark.js';
+  import get from 'lodash/get';
+  import clamp from 'lodash/clamp';
+  import Lockr from 'lockr';
+  import FocusLock from 'vue-focus-lock';
+  import Fullscreen from 'kolibri/components/Fullscreen';
+  import EmbeddedReadCard from 'kolibri-common/components/EmbeddedReadCard';
+  import useKResponsiveWindow from 'kolibri-design-system/lib/composables/useKResponsiveWindow';
+  import useContentViewer from 'kolibri/composables/useContentViewer';
+  import { ref, computed } from 'vue';
+  import iFrameView from './SandboxIFrameView';
+  import LoadingScreen from './LoadingScreen';
+  import LoadingError from './LoadingError';
+  import TopBar from './TopBar';
+  import TableOfContentsSideBar from './TableOfContentsSideBar.vue';
+  import SettingsSideBar from './SettingsSideBar';
+  import SearchSideBar from './SearchSideBar';
+  import BottomBar from './BottomBar';
+  import PreviousButton from './PreviousButton';
+  import NextButton from './NextButton';
+
+  import { THEMES, isDarkColor, DEFAULT_LINK_COLOR, resolveTheme } from './EpubConstants';
+
+  const FONT_SIZE_MIN = 8;
+  const FONT_SIZE_MAX = 32;
+  const FONT_SIZE_STEP = 4;
+
+  const SIDE_BARS = {
+    TOC: 'TOC',
+    SEARCH: 'SEARCH',
+    SETTINGS: 'SETTINGS',
+  };
+
+  const LOCATIONS_INTERVAL = 1000;
+
+  const EPUB_RENDERER_SETTINGS_KEY = 'kolibriEpubRendererSettings';
+
+  export default {
+    name: 'EpubRendererIndex',
+    components: {
+      Fullscreen,
+      EmbeddedReadCard,
+      TopBar,
+      TableOfContentsSideBar,
+      SettingsSideBar,
+      SearchSideBar,
+      LoadingScreen,
+      BottomBar,
+      PreviousButton,
+      NextButton,
+      FocusLock,
+      LoadingError,
+    },
+    setup(props, context) {
+      const { windowIsSmall } = useKResponsiveWindow();
+      const locations = ref([]);
+      const defaultDuration = computed(() => {
+        const WORDS_PER_MINUTE = 300;
+        const CHARS_PER_WORD = 10;
+        const LOCATIONS_INTERVAL = 1000;
+        if (!locations.value.length) {
+          return null;
+        }
+        const numberOfWords = (locations.value.length * LOCATIONS_INTERVAL) / CHARS_PER_WORD;
+        const seconds = (numberOfWords * 60) / WORDS_PER_MINUTE;
+        return seconds;
+      });
+      const {
+        defaultFile,
+        extraFields,
+        forceDurationBasedProgress,
+        durationBasedProgress,
+        contentDirection,
+        contentIsRtl,
+        reportLoadingError,
+        embedded,
+      } = useContentViewer(context, { defaultDuration });
+      return {
+        windowIsSmall,
+        locations,
+        defaultFile,
+        extraFields,
+        forceDurationBasedProgress,
+        durationBasedProgress,
+        contentDirection,
+        contentIsRtl,
+        reportLoadingError,
+        embedded,
+      };
+    },
+    data() {
+      return {
+        book: null,
+        rendition: null,
+        toc: [],
+        loaded: false,
+        errorLoading: false,
+        sideBarOpen: null,
+        theme: THEMES.WHITE,
+        fontSize: null,
+        isInFullscreen: false,
+        markInstance: null,
+        currentSection: null,
+        searchQuery: null,
+        sliderValue: 0,
+        relocationCount: 0,
+        scrolled: false,
+        currentLocation: null,
+        visitedPages: {},
+        updateContentStateInterval: null,
+      };
+    },
+    computed: {
+      isAtStart() {
+        return get(this.rendition, 'location.atStart', false);
+      },
+      isAtEnd() {
+        return get(this.rendition, 'location.atEnd', false);
+      },
+      savedLocation() {
+        if (this.extraFields && this.extraFields.contentState) {
+          return this.extraFields.contentState.savedLocation;
+        }
+        return null;
+      },
+      savedVisitedPages: {
+        get() {
+          if (this.extraFields && this.extraFields.contentState) {
+            return this.extraFields.contentState.savedVisitedPages || {};
+          }
+          return {};
+        },
+        set(value) {
+          this.visitedPages = value;
+        },
+      },
+      epubURL() {
+        return new URL(this.defaultFile.storage_url, window.location).href;
+      },
+      backgroundColor() {
+        return this.theme.backgroundColor;
+      },
+      textColor() {
+        return this.theme.textColor;
+      },
+      linkColor() {
+        return this.theme.linkColor || DEFAULT_LINK_COLOR;
+      },
+      themeStyle() {
+        const colorStyle = {
+          'background-color': `${this.backgroundColor}!important`,
+          color: `${this.textColor}!important`,
+        };
+        const alignmentStyle = {
+          'text-align': `${this.isRtl ? 'right' : 'left'}`,
+        };
+        const fontSizeStyle = this.fontSize ? { 'font-size': `${this.fontSize}!important` } : {};
+
+        const lineHeightStyle = {
+          'line-height': `1.4em!important`,
+        };
+
+        // In scrolled mode, display flex helps body size to it's content
+        // In paged column mode, clear margins on <html> to avoid issues with rendering
+        const htmlStyle = this.scrolled ? { display: 'flex' } : { margin: '0!important' };
+
+        // Width style overrides the pixel width added by epub.js, and in conjunction with flex
+        // above, helps SandboxIFrameView size containers according to true content width.
+        // Padding override kills an arbitrary `padding:0 (width / 12)px` set by epub.js
+        const bodyScrolledStyle = this.scrolled
+          ? { width: 'auto!important', padding: '20px!important' }
+          : {};
+
+        return {
+          html: { ...colorStyle, ...alignmentStyle, ...fontSizeStyle, ...htmlStyle },
+          body: { ...colorStyle, ...alignmentStyle, ...fontSizeStyle, ...bodyScrolledStyle },
+          p: { ...colorStyle, ...alignmentStyle, ...lineHeightStyle },
+          h1: { ...colorStyle },
+          h2: { ...colorStyle },
+          h3: { ...colorStyle },
+          h4: { ...colorStyle },
+          h5: { ...colorStyle },
+          'p:first-of-type::first-letter': { ...colorStyle },
+          // help media not overflow their columns
+          video: { 'max-width': '100%' },
+          img: { 'max-width': '100%' },
+          a: { color: `${this.linkColor}!important` },
+        };
+      },
+      tocSideBarIsOpen() {
+        return this.sideBarOpen === SIDE_BARS.TOC;
+      },
+      settingsSideBarIsOpen() {
+        return this.sideBarOpen === SIDE_BARS.SETTINGS;
+      },
+      searchSideBarIsOpen() {
+        return this.sideBarOpen === SIDE_BARS.SEARCH;
+      },
+      mobileEmbedded() {
+        return this.embedded && this.windowIsSmall && !this.isInFullscreen;
+      },
+      epubViewerStyle() {
+        const embeddedInline = this.embedded && !this.isInFullscreen;
+        const style = {
+          backgroundColor: 'var(--tokens-surface)',
+        };
+        if (embeddedInline) {
+          style.height = '25vh';
+          if (!this.mobileEmbedded) {
+            // The mobile-embedded preview gets its card border from EmbeddedReadCard.
+            style.border = `1px solid ${this.$themeTokens.fineLine}`;
+          }
+          if (!this.windowIsSmall) {
+            style.minHeight = '400px';
+          }
+        }
+        return style;
+      },
+      navigationButtonColor() {
+        // Choose arrow color from the actual background luminance so custom themes
+        // (which aren't in the fixed set) get legible arrows on dark backgrounds too.
+        return isDarkColor(this.backgroundColor) ? 'white' : 'black';
+      },
+      bottomBarHeading() {
+        if (this.currentSection) {
+          return this.currentSection.label.trim();
+        }
+        return '';
+      },
+      sliderStep() {
+        if (this.locations.length > 0) {
+          return Math.floor(Math.min(Math.max(100 / this.locations.length, 0.1), 100));
+        }
+        return 1;
+      },
+      decreaseFontSizeDisabled() {
+        return this.fontSize === `${FONT_SIZE_MIN}px`;
+      },
+      increaseFontSizeDisabled() {
+        return this.fontSize === `${FONT_SIZE_MAX}px`;
+      },
+      locationsAreReady() {
+        return this.locations && this.locations.length > 0;
+      },
+    },
+    watch: {
+      sideBarOpen(newSideBar, oldSideBar) {
+        this.$nextTick().then(() => {
+          if (oldSideBar === SIDE_BARS.SEARCH) {
+            this.clearMarks();
+          }
+          // Esc can close a side bar and exit fullscreen at once, which unmounts
+          // the top bar in the mobile embedded case before we return focus to it.
+          if (!newSideBar && this.$refs.topBar) {
+            switch (oldSideBar) {
+              case SIDE_BARS.TOC:
+                this.$refs.topBar.focusOnTocButton();
+                break;
+              case SIDE_BARS.SETTINGS:
+                this.$refs.topBar.focusOnSettingsButton();
+                break;
+              case SIDE_BARS.SEARCH:
+                this.$refs.topBar.focusOnSearchButton();
+                break;
+              default:
+                break;
+            }
+          }
+          if (newSideBar === SIDE_BARS.SEARCH) {
+            this.$refs.searchSideBar.focusOnInput();
+            if (this.searchQuery) {
+              this.clearMarks().then(this.createMarks(this.searchQuery));
+            }
+          }
+        });
+      },
+    },
+    created() {
+      // Try to load the appropriate directional CSS for the particular content
+      this.cssPromise = this.$options.contentModule.loadDirectionalCSS(this.contentDirection);
+      this.visitedPages = this.savedVisitedPages || {};
+    },
+    beforeMount() {
+      this.book = new Epub(this.epubURL, { openAs: 'epub' });
+      this.book.on(EVENTS.BOOK.OPEN_FAILED, err => {
+        this.errorLoading = true;
+        this.reportLoadingError(err);
+      });
+
+      const { theme = this.theme, fontSize = this.fontSize } =
+        Lockr.get(EPUB_RENDERER_SETTINGS_KEY) || {};
+      // resolveTheme re-resolves fixed themes to their live definition so a saved
+      // selection picks up an id (for matching) and current colors (e.g. link color).
+      this.theme = resolveTheme(theme);
+      this.fontSize = fontSize;
+    },
+    mounted() {
+      Promise.all([this.cssPromise, this.book.ready]).then(() => {
+        if (this.book.navigation) {
+          this.toc = this.book.navigation.toc;
+        }
+
+        this.rendition = this.book.renderTo(this.$refs.epubjsContainer, {
+          view: iFrameView,
+          resizeOnOrientationChange: false,
+          spread: 'auto',
+          minSpreadWidth: 600,
+        });
+
+        this.rendition
+          .display(this.savedLocation || undefined)
+          .then(() => {
+            const hasTables = this.rendition.getContents().reduce((hasTable, contents) => {
+              return hasTable || contents.document.getElementsByTagName('table').length > 0;
+            }, false);
+
+            // Tables have issues rendering, so switch from paginated flow to scrolled
+            if (hasTables) {
+              this.scrolled = true;
+              this.rendition.flow('scrolled');
+              this.rendition.clear();
+              // Re-renders and targets this.savedLocation (if set)
+              return this.rendition.display(this.savedLocation || undefined);
+            }
+
+            // For paginated, update settings
+            const bounds = this.$refs.epubjsContainer.getBoundingClientRect();
+            Object.assign(this.rendition.manager.stage.settings, {
+              width: bounds.width,
+              height: bounds.height,
+            });
+
+            const resize = new Promise((resolve, reject) => {
+              this.rendition.once(EVENTS.RENDITION.DISPLAYED, resolve);
+              this.rendition.once(EVENTS.RENDITION.DISPLAY_ERROR, reject);
+            });
+
+            return this.rendition.q
+              .enqueue(() => this.rendition.resize())
+              .then(() => resize)
+              .then(
+                () => {},
+                () => {
+                  // In IE 11, EVENTS.RENDITION.DISPLAY_ERROR occurs when calling .resize(),
+                  // so we'll try to redisplay, and if that's successful remove `errorLoading`
+                  return this.rendition.display(this.savedLocation || undefined);
+                },
+              )
+              .then(() => {
+                this.errorLoading = false;
+              });
+          })
+          .then(
+            () => {
+              this.handleReadyRendition();
+            },
+            () => {
+              this.errorLoading = true;
+            },
+          );
+
+        this.rendition.on(EVENTS.RENDITION.DISPLAY_ERROR, err => {
+          this.errorLoading = true;
+          this.reportLoadingError(err);
+        });
+      });
+    },
+    beforeDestroy() {
+      this.updateContentState();
+      this.updateProgress();
+      this.$emit('stopTracking');
+      window.removeEventListener('mousedown', this.handleMouseDown, { passive: true });
+      clearInterval(this.updateContentStateInterval);
+    },
+    methods: {
+      updateProgress() {
+        if (this.locations.length > 0) {
+          if (this.forceDurationBasedProgress) {
+            // update progress using total time user has spent on the epub
+            this.$emit('updateProgress', this.durationBasedProgress);
+          } else {
+            // update progress using number of pages seen out of available pages
+            this.$emit(
+              'updateProgress',
+              Object.keys(this.visitedPages || {}).length / this.locations.length,
+            );
+          }
+        }
+      },
+      storeVisitedPage(currentLocation) {
+        if (currentLocation) {
+          const visited = this.savedVisitedPages;
+          visited[currentLocation] = true;
+          this.savedVisitedPages = visited;
+        }
+      },
+      handleReadyRendition() {
+        this.updateRenditionTheme(this.themeStyle);
+
+        this.rendition.on(EVENTS.RENDITION.RELOCATED, location => this.relocatedHandler(location));
+        this.rendition.on('keyup', this.handleKeyUps);
+        this.rendition.on('click', () => this.closeSideBar());
+
+        window.addEventListener('mousedown', this.handleMouseDown, { passive: true });
+
+        this.loaded = true;
+
+        this.book.locations.generate(LOCATIONS_INTERVAL).then(locations => {
+          this.locations = locations;
+          this.$emit('startTracking');
+          this.updateContentStateInterval = setInterval(this.updateProgress, 30000);
+
+          // Update current location, .currentLocation() can return Promise or value
+          Promise.resolve()
+            .then(() => this.rendition.currentLocation())
+            .then(currentLocation => {
+              if (currentLocation && currentLocation.start) {
+                this.relocatedHandler(currentLocation);
+              }
+            });
+        });
+      },
+      updateRenditionTheme(newTheme) {
+        const themeName = JSON.stringify(newTheme);
+        this.rendition.themes.register(themeName, newTheme);
+        this.rendition.themes.select(themeName);
+      },
+      getIFrameView() {
+        return this.rendition
+          .views()
+          .displayed()
+          .filter(view => view instanceof iFrameView)
+          .shift();
+      },
+      handleKeyUps(event) {
+        const focus = () => {
+          const view = this.getIFrameView();
+          if (view) {
+            view.focus();
+          }
+        };
+
+        switch (event.which) {
+          case 37:
+            this.goToPreviousPage().then(focus);
+            break;
+          case 39:
+            this.goToNextPage().then(focus);
+            break;
+        }
+      },
+      handleMouseDown(event) {
+        // The top bar sits outside the content div that stops this event, so its
+        // toggles would close the side bar here and immediately reopen it on click.
+        if (this.$refs.topBar && this.$refs.topBar.$el.contains(event.target)) {
+          return;
+        }
+        // This check is necessary because event listeners don't seem to be removed on beforeDestroy
+        if (this.$refs.epubViewer) {
+          let closeSideBar = false;
+          if (this.tocSideBarIsOpen) {
+            closeSideBar = !this.$refs.tocSideBar.$el.contains(event.target);
+          } else if (this.settingsSideBarIsOpen) {
+            closeSideBar = !this.$refs.settingsSideBar.$el.contains(event.target);
+          } else if (this.searchSideBarIsOpen) {
+            closeSideBar = !this.$refs.searchSideBar.$el.contains(event.target);
+          }
+          if (closeSideBar) {
+            this.closeSideBar();
+          }
+        }
+      },
+      closeSideBar() {
+        this.sideBarOpen = null;
+      },
+      goToNextPage() {
+        return this.rendition.next();
+      },
+      goToPreviousPage() {
+        return this.rendition.prev();
+      },
+      jumpToLocation(locationToJumpTo) {
+        return this.rendition.display(locationToJumpTo);
+      },
+      toggleMenu(sideBarName) {
+        if (this.sideBarOpen === sideBarName) {
+          this.closeSideBar();
+        } else {
+          this.sideBarOpen = sideBarName;
+        }
+      },
+      handleTocToggle() {
+        this.toggleMenu(SIDE_BARS.TOC);
+      },
+      handleSearchToggle() {
+        this.toggleMenu(SIDE_BARS.SEARCH);
+      },
+      handleSettingToggle() {
+        this.toggleMenu(SIDE_BARS.SETTINGS);
+      },
+      handleTocNavigation(item) {
+        this.jumpToLocation(item.href)
+          .then(() => {
+            this.closeSideBar();
+          })
+          .catch(() => {
+            this.jumpToLocation(`xhtml/${item.href}`).then(() => {
+              this.closeSideBar();
+            });
+          });
+      },
+      getCurrentFontSize() {
+        const view = this.getIFrameView();
+
+        // Use epub Contents class which will get computed font-size
+        return view ? view.getContents().css('font-size', null) : null;
+      },
+      handleChangeFontSize(difference) {
+        const fontSizeNumericValue = parseFloat(this.getCurrentFontSize());
+        const newFontSizeNumericValue = clamp(
+          fontSizeNumericValue + difference * FONT_SIZE_STEP,
+          FONT_SIZE_MIN,
+          FONT_SIZE_MAX,
+        );
+        this.setFontSize(`${newFontSizeNumericValue}px`);
+      },
+      expandIFrameView() {
+        const view = this.getIFrameView();
+
+        if (view) {
+          // TODO: Figure out how to get this trigger the iframe containers to resize
+        }
+      },
+      setTheme(theme) {
+        this.theme = theme;
+        this.persistSettings({ theme });
+        this.updateRenditionTheme(this.themeStyle);
+      },
+      setFontSize(fontSize) {
+        this.fontSize = fontSize;
+        this.persistSettings({ fontSize });
+        this.updateRenditionTheme(this.themeStyle);
+
+        if (this.scrolled) {
+          this.expandIFrameView();
+        }
+      },
+      persistSettings(settings) {
+        const saved = Lockr.get(EPUB_RENDERER_SETTINGS_KEY);
+        Lockr.set(EPUB_RENDERER_SETTINGS_KEY, {
+          ...saved,
+          ...settings,
+        });
+      },
+      handleNewSearchQuery(searchQuery) {
+        this.searchQuery = searchQuery;
+        this.clearMarks().then(this.createMarks(searchQuery));
+      },
+      handleNavigateToSearchResult(searchResult) {
+        this.clearMarks()
+          .then(() => this.jumpToLocation(searchResult.cfi))
+          .then(() => this.createMarks(this.searchQuery));
+      },
+      clearMarks() {
+        return new Promise(resolve => {
+          if (this.markInstance) {
+            this.markInstance.unmark({
+              done: () => {
+                this.markInstance = null;
+                resolve();
+              },
+            });
+          } else {
+            resolve();
+          }
+        });
+      },
+      createMarks(searchQuery) {
+        const view = this.getIFrameView();
+        if (!view) {
+          return Promise.resolve();
+        }
+
+        return new Promise(resolve => {
+          const root = view.getContents().root();
+          this.markInstance = new Mark(root.getElementsByTagName('body').item(0));
+          this.markInstance.mark(searchQuery, {
+            separateWordSearch: false,
+            done: () => resolve(),
+          });
+        });
+      },
+      flattenToc(toc) {
+        return [].concat(...toc.map(section => [section, ...this.flattenToc(section.subitems)]));
+      },
+      getCurrentSection(currentLocationStart) {
+        let currentSection;
+        if (currentLocationStart) {
+          const flatToc = this.flattenToc(this.toc);
+          const currentLocationHref = this.book.canonical(currentLocationStart.href);
+          currentSection = flatToc.find(
+            item => this.book.canonical(item.href) === currentLocationHref,
+          );
+        }
+        return currentSection;
+      },
+      updateCurrentSection(currentLocationStart) {
+        this.currentSection = this.getCurrentSection(currentLocationStart);
+      },
+      relocatedHandler(location) {
+        // Ensures that when we're on the last page, we set the slider value to 100
+        // otherwise, we show the slider % using the start
+        if (location.atEnd) {
+          this.sliderValue = 100;
+        } else {
+          this.sliderValue = location.start.percentage * 100;
+        }
+        // Changes on every relocation, even when sliderValue does not, so the
+        // bottom bar can put its slider back in step with the real position
+        this.relocationCount += 1;
+        this.updateCurrentSection(location.start);
+        this.currentLocation = location.start.cfi;
+        for (
+          let locationIndex = location.start.location;
+          locationIndex <= location.end.location;
+          locationIndex++
+        ) {
+          this.storeVisitedPage(this.locations[locationIndex]);
+        }
+        if (location.end.percentage >= 1) {
+          this.finish();
+        }
+        this.updateProgress();
+        this.updateContentState();
+      },
+      handleSliderChanged(newSliderValue) {
+        const indexOfLocationToJumpTo = Math.floor(
+          (this.locations.length - 1) * (newSliderValue / 100),
+        );
+        const locationToJumpTo = this.locations[indexOfLocationToJumpTo];
+        this.jumpToLocation(locationToJumpTo);
+      },
+      updateContentState() {
+        let contentState;
+        if (this.extraFields) {
+          contentState = {
+            ...this.extraFields.contentState,
+            savedLocation: this.currentLocation || this.savedLocation,
+            savedVisitedPages: this.visitedPages || this.savedVisitedPages,
+          };
+        } else {
+          contentState = {
+            savedLocation: this.currentLocation || this.savedLocation,
+            savedVisitedPages: this.visitedPages || this.savedVisitedPages,
+          };
+        }
+        this.$emit('updateContentState', contentState);
+      },
+      finish() {
+        this.$emit('finished');
+      },
+    },
+  };
+
+</script>
+
+
+<style lang="scss" scoped>
+
+  @import '~kolibri-design-system/lib/styles/definitions';
+  @import './EpubStyles';
+
+  $top-bar-height: 48px;
+  $bottom-bar-height: 54px;
+  $navigation-button-small: 36px;
+  $navigation-button-normal: 52px;
+
+  .epub-viewer {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 64px);
+    overflow: hidden;
+    font-size: smaller;
+    border-radius: $radius;
+  }
+
+  .top-bar-component {
+    flex-shrink: 0;
+  }
+
+  .epub-viewer-content {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    border: solid 1px;
+    border-radius: $radius;
+  }
+
+  .side-bar {
+    @extend %momentum-scroll;
+
+    position: absolute;
+    top: 0;
+    bottom: $bottom-bar-height;
+  }
+
+  .side-bar-left {
+    left: 0;
+  }
+
+  .side-bar-right {
+    right: 0;
+  }
+
+  .bottom-bar {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+  }
+
+  .d-t {
+    @include d-t;
+  }
+
+  .d-t-r {
+    @include d-t-r;
+  }
+
+  .d-t-c {
+    @include d-t-c;
+  }
+
+  .navigation-and-epubjs {
+    @extend %momentum-scroll;
+
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: $bottom-bar-height;
+    left: 0;
+    max-height: calc(100vh - #{$top-bar-height + $bottom-bar-height});
+    white-space: nowrap;
+  }
+
+  .epubjs-navigation {
+    width: $navigation-button-normal;
+  }
+
+  .epubjs-parent {
+    position: relative;
+    width: calc(100% - (#{$navigation-button-normal} * 2));
+  }
+
+  /deep/ .epub-container {
+    position: absolute !important;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+  }
+
+  .epub-viewer.no-bottom-bar {
+    .side-bar,
+    .navigation-and-epubjs {
+      bottom: 0;
+    }
+
+    .navigation-and-epubjs {
+      max-height: none;
+    }
+  }
+
+  .epub-viewer.small .epubjs-navigation {
+    width: $navigation-button-small;
+  }
+
+  .epub-viewer.small .epubjs-parent {
+    width: calc(100% - (#{$navigation-button-small} * 2));
+  }
+
+  .epub-viewer.scrolled {
+    .epubjs-navigation {
+      display: none;
+    }
+
+    .epubjs-parent {
+      width: 100%;
+    }
+
+    /deep/ .epub-container .epub-view {
+      min-width: 100%;
+    }
+  }
+
+  .column {
+    position: relative;
+    display: inline-block;
+    height: 100%;
+    overflow: hidden;
+    text-align: center;
+    white-space: normal;
+    vertical-align: top;
+  }
+
+</style>

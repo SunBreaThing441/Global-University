@@ -1,0 +1,32 @@
+:root {
+  /* ==========================================================================
+     8pt Mathematical Spatial Rhythm
+     ========================================================================== */
+  --mds-space-0: 0rem;
+  --mds-space-1: 0.25rem;  /* 4px  - Micro padding, borders */
+  --mds-space-2: 0.5rem;   /* 8px  - Tight gaps, icon offsets */
+  --mds-space-3: 0.75rem;  /* 12px - Form field spacing */
+  --mds-space-4: 1.0rem;   /* 16px - Standard padding */
+  --mds-space-5: 1.25rem;  /* 20px - Medium section padding */
+  --mds-space-6: 1.5rem;   /* 24px - Card internal padding */
+  --mds-space-8: 2.0rem;   /* 32px - Section divisions */
+  --mds-space-10: 2.5rem;  /* 40px - Major gaps */
+  --mds-space-12: 3.0rem;  /* 48px - Macro divisions */
+  --mds-space-16: 4.0rem;  /* 64px - Hero margins */
+
+  /* Curvature Radii */
+  --mds-radius-none: 0px;
+  --mds-radius-sm: 4px;
+  --mds-radius-md: 8px;
+  --mds-radius-lg: 14px;
+  --mds-radius-xl: 20px;
+  --mds-radius-full: 9999px;
+}
+
+/* ==========================================================================
+   Native Bi-Directional RTL Directional Icon Mirroring
+   ========================================================================== */
+[dir="rtl"] .mds-icon[data-mirror="true"],
+[dir="rtl"] .mds-icon--navigational {
+  transform: scaleX(-1);
+}

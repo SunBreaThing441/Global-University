@@ -1,0 +1,46 @@
+[project]
+name = "kolibri-installer-android"
+version = "0.1.0"
+requires-python = ">=3.7"
+dependencies = []
+
+[project.optional-dependencies]
+# Build deps stay an extra; test and dev are dependency-groups so tox's
+# platform_tests matrix installs them via `uv sync --group test`.
+build = [
+    "google-api-python-client==2.161.0; python_version >= '3.8'",
+    "google-auth==2.38.0; python_version >= '3.8'",
+    "google-auth-httplib2==0.2.0; python_version >= '3.8'",
+]
+
+[dependency-groups]
+test = [
+    "pytest",
+    "websockets>=16.0; python_version >= '3.10'",
+]
+dev = [
+    "prek; python_version >= '3.8'",
+    "websockets>=16.0; python_version >= '3.10'",
+]
+
+[tool.ruff]
+line-length = 80
+# The host scripts and Chaquopy embedded runtime both run on Python 3.10
+# (see .python-version). requires-python is held at >=3.7 only so this
+# workspace member does not raise the shared lock's Python floor, so pin the
+# lint target explicitly rather than let ruff infer py37 from requires-python.
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "C90", "I", "T10"]
+ignore = ["E226", "E203", "E501", "E741"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.isort]
+force-single-line = true
+known-first-party = ["kolibri"]
+
+[tool.pytest.ini_options]
+testpaths = ["scripts/tests"]

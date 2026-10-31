@@ -1,0 +1,23 @@
+[project]
+name = "kolibri-server"
+version = "0.0.0"
+# Floored to root Kolibri's range so a workspace-wide `uv sync --python <version>`
+# never narrows the lock or fails on this member. Matches
+# python_packages/kolibri-sentry-plugin.
+requires-python = ">=3.6, <3.15"
+dependencies = [
+    "kolibri",
+]
+
+[tool.uv.sources]
+kolibri = { workspace = true }
+
+[tool.uv]
+# Not a wheel — the deliverable is a .deb, so there is no build-system and uv
+# manages only this member's deps in the shared lock/venv (never builds it).
+package = false
+
+[tool.ruff]
+# Inherit root ruff (select, isort first-party list, force-single-line) so this
+# member is linted like the rest of the monorepo.
+extend = "../../pyproject.toml"

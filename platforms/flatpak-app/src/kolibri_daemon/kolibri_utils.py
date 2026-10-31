@@ -1,0 +1,92 @@
+from __future__ import annotations
+
+import fcntl
+import importlib.util
+import logging
+import os
+from collections.abc import Iterator
+from contextlib import contextmanager
+
+from kolibri_app.globals import KOLIBRI_HOME_PATH
+
+from .content_extensions_manager import ContentExtensionsManager
+
+logger = logging.getLogger(__name__)
+
+# These Kolibri plugins must be enabled for the application to function.
+# "kolibri_app" is this project's bundled plugin (src/kolibri_app/kolibri_plugin.py),
+# which registers GetOSUserHook + CheckIsMeteredHook. It replaces the
+# kolibri.plugins.app interface, which was removed in Kolibri 0.19.
+REQUIRED_PLUGINS = [
+    "kolibri_app",
+]
+
+# These Kolibri plugins will be automatically enabled if they are available:
+OPTIONAL_PLUGINS = [
+    "kolibri_app_desktop_xdg_plugin",
+    "kolibri_dynamic_collections_plugin",
+    "kolibri_zim_plugin",
+]
+
+# TODO: Automatically enable plugins from flatpak plugin extensions.
+
+
+def init_kolibri(**kwargs):
+    _init_kolibri_env()
+
+    # kolibri.utils.conf reads KOLIBRI_HOME at import; _init_kolibri_env() sets it.
+    from kolibri.utils.main import initialize  # noqa: PLC0415
+
+    for plugin_name in REQUIRED_PLUGINS:
+        _enable_kolibri_plugin(plugin_name)
+
+    for plugin_name in OPTIONAL_PLUGINS:
+        _enable_kolibri_plugin(plugin_name, optional=True)
+
+    initialize(**kwargs)
+
+
+@contextmanager
+def kolibri_home_lock() -> Iterator[None]:
+    """
+    Blocks until no other kolibri-daemon is using KOLIBRI_HOME.
+    """
+
+    # Each `flatpak run` has its own PID namespace, so Kolibri's PID file
+    # cannot tell a new daemon whether the previous one is still stopping.
+    KOLIBRI_HOME_PATH.mkdir(parents=True, exist_ok=True)
+    with open(KOLIBRI_HOME_PATH / "kolibri-daemon.lock", "w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        yield
+
+
+def _init_kolibri_env():
+    os.environ["DJANGO_SETTINGS_MODULE"] = "kolibri_app.kolibri_settings"
+    os.environ["KOLIBRI_PROJECT"] = "kolibri-gnome"
+
+    # Kolibri defaults to a very large thread pool. Because we expect this
+    # application to be used in a single user environment with a limited
+    # workload, we can use a smaller number of threads.
+    os.environ.setdefault("KOLIBRI_CHERRYPY_THREAD_POOL", "10")
+
+    # TODO: It would be nice to tell Kolibri to please use a more limited set of
+    #       facility and device settings defaults:
+    #       <https://github.com/learningequality/kolibri-installer-gnome/issues/106>
+
+    content_extensions_manager = ContentExtensionsManager()
+    content_extensions_manager.apply(os.environ)
+
+
+def _enable_kolibri_plugin(plugin_name: str, optional=False) -> bool:
+    # kolibri.utils.conf reads KOLIBRI_HOME at import; _init_kolibri_env() sets it.
+    from kolibri.plugins import config as plugins_config  # noqa: PLC0415
+    from kolibri.plugins.utils import enable_plugin  # noqa: PLC0415
+
+    if optional and not importlib.util.find_spec(plugin_name):
+        return False
+
+    if plugin_name not in plugins_config.ACTIVE_PLUGINS:
+        logger.info("Enabling plugin %s", plugin_name)
+        enable_plugin(plugin_name)
+
+    return True

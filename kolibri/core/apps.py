@@ -1,0 +1,172 @@
+import logging
+import os
+
+from django.apps import AppConfig
+from django.conf import settings
+from django.core.files.storage import default_storage
+from django.db import connections
+from django.db.backends.signals import connection_created
+from django_filters.filters import UUIDFilter
+from django_filters.rest_framework.filterset import FilterSet
+
+from kolibri.core.errors import RedisConnectionError
+from kolibri.core.sqlite.pragmas import CONNECTION_PRAGMAS
+from kolibri.core.sqlite.pragmas import START_PRAGMAS
+from kolibri.core.utils.cache import process_cache
+from kolibri.core.utils.cache import RedisSettingsHelper
+from kolibri.plugins.registry import registered_plugins
+from kolibri.utils.conf import OPTIONS
+from kolibri.utils.data import bytes_for_humans
+
+logger = logging.getLogger(__name__)
+
+
+class KolibriCoreConfig(AppConfig):
+    name = "kolibri.core"
+
+    def ready(self):
+        """
+        Sets up PRAGMAs.
+        """
+        connection_created.connect(self.activate_pragmas_per_connection)
+        self.activate_pragmas_on_start()
+        # Log the settings file that we are running Kolibri with.
+        # Do this logging here, as this will be after Django has done its processing of
+        # Any environment variables or --settings command line arguments.
+        logger.info(
+            "Running Kolibri with the following settings: %s",
+            os.environ["DJANGO_SETTINGS_MODULE"],
+        )
+        self.check_redis_settings()
+        self.check_file_storage_settings()
+        # Do this to add an automapping from the Morango UUIDField to the UUIDFilter so that it automatically
+        # maps to this filter when using the UUIDField in a filter.
+        # apps.py is imported before the app registry is ready.
+        from morango.models import UUIDField  # noqa: PLC0415
+
+        FilterSet.FILTER_DEFAULTS.update({UUIDField: {"filter_class": UUIDFilter}})
+        # Register any django apps that may have kolibri plugin
+        # modules inside them
+        registered_plugins.register_non_plugins(settings.INSTALLED_APPS)
+
+    @staticmethod
+    def activate_pragmas_per_connection(sender, connection, **kwargs):
+        """
+        Activate SQLite3 PRAGMAs that apply on a per-connection basis. A no-op
+        right now, but kept around as infrastructure if we ever want to add
+        PRAGMAs in the future.
+        """
+
+        if connection.vendor == "sqlite":
+            cursor = connection.cursor()
+
+            # Shorten the default WAL autocheckpoint from 1000 pages to 500
+            cursor.executescript(CONNECTION_PRAGMAS)
+
+            # We don't turn on the following pragmas, because they have negligible
+            # performance impact. For reference, here's what we've tested:
+
+            # Don't ensure that the OS has fully flushed
+            # our data to disk.
+            # cursor.execute("PRAGMA synchronous=OFF;")
+
+            # Store cross-database JOINs in memory.
+            # cursor.execute("PRAGMA temp_store=MEMORY;")
+
+    @staticmethod
+    def activate_pragmas_on_start():
+        """
+        Activate a set of PRAGMAs that apply to the database itself,
+        and not on a per connection basis.
+        :return:
+        """
+        for connection in connections.all():
+            if connection.vendor == "sqlite":
+                cursor = connection.cursor()
+
+                # http://www.sqlite.org/wal.html
+                # WAL's main advantage allows simultaneous reads
+                # and writes (vs. the default exclusive write lock)
+                # at the cost of a slight penalty to all reads.
+                cursor.execute(START_PRAGMAS)
+                connection.close()
+
+    @staticmethod
+    def check_file_storage_settings():
+        """
+        Check that the file storage settings are sensible.
+        https://docs.djangoproject.com/en/3.2/ref/files/storage/
+        """
+        # TODO This should be a bonus sanity check
+        # Options per https://django-storages.readthedocs.io/en/latest/backends/gcloud.html
+        if OPTIONS["FileStorage"]["STORAGE_BACKEND"] == "gcs":
+            default_storage.get_available_name("kolibri")
+
+    @staticmethod
+    def check_redis_settings():
+        """
+        Check that Redis settings are sensible, and use the lower level Redis client to make updates
+        if we are configured to do so, and if we should, otherwise make some logging noise.
+        """
+
+        if OPTIONS["Cache"]["CACHE_BACKEND"] != "redis":
+            return
+
+        # Don't import until we've confirmed we're using Redis
+        # to avoid a hard dependency on Redis
+        # the options config has already been validated at this point
+        # so we know that redis is available.
+        from redis.exceptions import ConnectionError  # noqa: PLC0415
+
+        config_maxmemory = OPTIONS["Cache"]["CACHE_REDIS_MAXMEMORY"]
+        config_maxmemory_policy = OPTIONS["Cache"]["CACHE_REDIS_MAXMEMORY_POLICY"]
+
+        try:
+            # see redis_cache.backends.single.RedisCache
+            helper = RedisSettingsHelper(process_cache.get_master_client())
+
+            # set policy first
+            # default setting is "noeviction"
+            maxmemory_policy = helper.get_maxmemory_policy()
+            if (
+                config_maxmemory_policy != ""
+                and maxmemory_policy != config_maxmemory_policy
+            ):
+                helper.set_maxmemory_policy(config_maxmemory_policy)
+            elif maxmemory_policy == "noeviction":
+                logger.warning(
+                    "Redis is configured without a maximum memory policy. Using Redis with "
+                    "Kolibri, the following is suggested: maxmemory-policy allkeys-lru"
+                )
+
+            # default setting is "0", or no limit
+            maxmemory = helper.get_maxmemory()
+            if config_maxmemory > 0 and maxmemory != config_maxmemory:
+                used_memory = helper.get_used_memory()
+                if config_maxmemory < used_memory:
+                    logger.warning(
+                        "Redis was using %s before setting `maxmemory` configuration of %s",
+                        bytes_for_humans(used_memory),
+                        bytes_for_humans(config_maxmemory),
+                    )
+
+                helper.set_maxmemory(config_maxmemory)
+            elif maxmemory == 0:
+                logger.warning("Redis is configured without a maximum memory size.")
+
+            # add a final message about the redis configuration
+            if not helper.changed and (
+                maxmemory == 0 or maxmemory_policy == "noeviction"
+            ):
+                logger.warning(
+                    "Problematic Redis settings detected, please see Redis configuration "
+                    "documentation for details: https://redis.io/topics/config"
+                )
+
+        except ConnectionError as e:
+            logger.exception("Unable to connect to Redis")
+
+            raise RedisConnectionError(f"Unable to connect to Redis: {e}") from e
+
+        except Exception:
+            logger.exception("Unable to check Redis settings")

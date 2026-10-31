@@ -1,0 +1,15 @@
+:root {
+  /* ==========================================================================
+     Non-Breaking Legacy Token Compatibility Bridge
+     Seamlessly maps legacy Kolibri Design System (KDS) tokens to Meridian Tokens
+     ========================================================================== */
+  --tokens-surface: var(--mds-color-surface-base);
+  --tokens-text: var(--mds-color-text-primary);
+  --tokens-textDisabled: var(--mds-color-text-tertiary);
+  --tokens-textInverted: var(--mds-color-text-inverse);
+  --tokens-primary: var(--mds-color-brand-primary);
+  --tokens-primaryDark: var(--mds-primitive-cobalt-950);
+  --tokens-annotation: var(--mds-color-text-secondary);
+  --tokens-fineLine: var(--mds-color-border-subtle);
+  --tokens-appBar: var(--mds-color-surface-glass);
+}

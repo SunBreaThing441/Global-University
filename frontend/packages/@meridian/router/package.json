@@ -1,0 +1,13 @@
+{
+  "name": "@meridian/router",
+  "version": "1.0.0",
+  "description": "Meridian Global secured Vue 3 routing and hierarchical RBAC guards",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "dependencies": {
+    "@meridian/auth": "workspace:*",
+    "@meridian/views": "workspace:*",
+    "vue": "^3.5.0",
+    "vue-router": "^4.4.0"
+  }
+}

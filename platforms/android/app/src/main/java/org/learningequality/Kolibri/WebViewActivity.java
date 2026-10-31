@@ -1,0 +1,518 @@
+package org.learningequality.Kolibri;
+
+import android.Manifest;
+import android.content.ActivityNotFoundException;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.drawable.AnimatedVectorDrawable;
+import android.graphics.drawable.Drawable;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Bundle;
+import android.util.Log;
+import android.view.View;
+import android.webkit.CookieManager;
+import android.webkit.URLUtil;
+import android.webkit.ValueCallback;
+import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
+import android.widget.TextView;
+import androidx.activity.OnBackPressedCallback;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.annotation.VisibleForTesting;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowInsetsCompat;
+import com.chaquo.python.Python;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import org.json.JSONObject;
+import org.learningequality.Kolibri.util.FileChooserUtils;
+import org.learningequality.Kolibri.util.PickedFiles;
+
+/**
+ * Main activity that displays Kolibri in a WebView using HTTP + Service Worker
+ *
+ * <p>Waits for the HTTP server, then calls Python to build an initialization URL with auth token.
+ * Restores the user's last page via the saved path in SharedPreferences.
+ *
+ * <p>Android stops the server service once the app has been idle. The page is frozen while the
+ * activity is stopped, and reloaded only when it has to be — a new port, or a failed load.
+ */
+public class WebViewActivity extends AppCompatActivity {
+  private static final String TAG = "WebViewActivity";
+  private static final int REQUEST_NOTIFICATION_PERMISSION = 1001;
+  private static final int REQUEST_STORAGE_PERMISSION = 1002;
+  private static final String LOOPBACK_IP = "127.0.0.1";
+  private static final String LOCALHOST = "localhost";
+
+  private WebView webView;
+  private KolibriJavascriptBridge bridge;
+  private FrameLayout fullscreenContainer;
+  private View splashContainer;
+  private boolean shouldClearHistory;
+
+  /**
+   * The location this load is restoring, held from when it was issued: the landed page's own
+   * doUpdateVisitedHistory overwrites the saved one before onPageFinished runs.
+   */
+  private String pendingRestoreLocation;
+
+  private boolean mainFrameLoadFailed;
+  private ValueCallback<Uri[]> pendingFilePickerCallback;
+  private ActivityResultLauncher<String[]> filePickerLauncher;
+  private final ExecutorService fileExecutor = Executors.newCachedThreadPool();
+
+  @Override
+  protected void onCreate(Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);
+    setContentView(R.layout.activity_webview);
+
+    applyEdgeToEdgeInsets();
+    requestNotificationPermission();
+    requestLegacyStoragePermission();
+    setupSplash();
+    setupWebView();
+    setupBackNavigation();
+    loadKolibri();
+  }
+
+  @Override
+  protected void onStart() {
+    super.onStart();
+    // Restart the server service if Android stopped it while the app was idle
+    startService(new Intent(this, KolibriServerService.class));
+    // LiveData does not re-deliver an unchanged value on returning to STARTED, so nothing else
+    // would thaw a page whose server never went away.
+    if (Boolean.TRUE.equals(
+        KolibriServerViewModel.getInstance().getServerReadyLiveData().getValue())) {
+      resumeWebView();
+    }
+  }
+
+  @Override
+  protected void onStop() {
+    super.onStop();
+    pauseWebView();
+  }
+
+  /**
+   * Keeps the page from issuing requests while the server may be away. {@code pauseTimers()} is
+   * process-wide — fine with a single WebView — and stops the heartbeat's setTimeout chain without
+   * stopping event-driven JS, so a file-chooser result still lands.
+   */
+  private void pauseWebView() {
+    if (webView != null) {
+      webView.onPause();
+      webView.pauseTimers();
+    }
+  }
+
+  private void resumeWebView() {
+    if (webView != null) {
+      webView.resumeTimers();
+      webView.onResume();
+    }
+  }
+
+  /**
+   * Apply system-bar + display-cutout insets as padding on the root container. Android 15+ (API
+   * 35+) enforces edge-to-edge layout when targetSdk>=35, so without this the WebView and splash
+   * draw under the status/nav bars and the yellow splash color bleeds into those zones.
+   */
+  private void applyEdgeToEdgeInsets() {
+    View root = findViewById(R.id.root_container);
+    ViewCompat.setOnApplyWindowInsetsListener(
+        root,
+        (v, windowInsets) -> {
+          Insets insets =
+              windowInsets.getInsets(
+                  WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
+          v.setPadding(insets.left, insets.top, insets.right, insets.bottom);
+          return WindowInsetsCompat.CONSUMED;
+        });
+  }
+
+  /** Request POST_NOTIFICATIONS permission on Android 13+ */
+  private void requestNotificationPermission() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+          != PackageManager.PERMISSION_GRANTED) {
+        Log.d(TAG, "Requesting POST_NOTIFICATIONS permission");
+        ActivityCompat.requestPermissions(
+            this,
+            new String[] {Manifest.permission.POST_NOTIFICATIONS},
+            REQUEST_NOTIFICATION_PERMISSION);
+      }
+    }
+  }
+
+  /**
+   * Request WRITE_EXTERNAL_STORAGE on API 24-28, needed for downloads below MediaStore's API 29
+   * floor.
+   */
+  private void requestLegacyStoragePermission() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
+        && ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            != PackageManager.PERMISSION_GRANTED) {
+      Log.d(TAG, "Requesting WRITE_EXTERNAL_STORAGE permission");
+      ActivityCompat.requestPermissions(
+          this,
+          new String[] {Manifest.permission.WRITE_EXTERNAL_STORAGE},
+          REQUEST_STORAGE_PERMISSION);
+    }
+  }
+
+  /** Start the animated splash screen and set version text. */
+  private void setupSplash() {
+    splashContainer = findViewById(R.id.splash_container);
+
+    ImageView splashImage = findViewById(R.id.splash_image);
+    Drawable drawable = splashImage.getDrawable();
+    if (drawable instanceof AnimatedVectorDrawable) {
+      ((AnimatedVectorDrawable) drawable).start();
+    }
+
+    TextView versionText = findViewById(R.id.version_text);
+    versionText.setText(BuildConfig.VERSION_NAME);
+  }
+
+  /**
+   * Setup back navigation using OnBackPressedCallback. Handles WebView history navigation before
+   * exiting activity.
+   */
+  private void setupBackNavigation() {
+    getOnBackPressedDispatcher()
+        .addCallback(
+            this,
+            new OnBackPressedCallback(true) {
+              @Override
+              public void handleOnBackPressed() {
+                if (webView != null && webView.canGoBack()) {
+                  webView.goBack();
+                } else {
+                  // Disable this callback and trigger default back behavior
+                  setEnabled(false);
+                  getOnBackPressedDispatcher().onBackPressed();
+                }
+              }
+            });
+  }
+
+  private void setupWebView() {
+    filePickerLauncher =
+        registerForActivityResult(
+            new ActivityResultContracts.OpenDocument(),
+            uri -> {
+              ValueCallback<Uri[]> callback = pendingFilePickerCallback;
+              pendingFilePickerCallback = null;
+              if (callback == null) {
+                return;
+              }
+              if (uri == null) {
+                callback.onReceiveValue(null);
+                return;
+              }
+              deliverPickedFile(callback, uri);
+            });
+
+    if (BuildConfig.DEBUG) {
+      WebView.setWebContentsDebuggingEnabled(true);
+    }
+
+    this.webView = findViewById(R.id.webview);
+    fullscreenContainer = findViewById(R.id.fullscreen_container);
+    WebSettings settings = webView.getSettings();
+
+    // Enable cookies and ensure persistence
+    CookieManager cookieManager = CookieManager.getInstance();
+    cookieManager.setAcceptCookie(true);
+    cookieManager.setAcceptThirdPartyCookies(webView, false);
+
+    // Enable DOM storage (localStorage/sessionStorage) for Kolibri web app
+    settings.setDomStorageEnabled(true);
+    settings.setJavaScriptEnabled(true);
+
+    // Local HTTP server only — no mixed content needed
+    settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+
+    // No file:// or content:// access needed — Kolibri loads via http://127.0.0.1
+    settings.setAllowFileAccess(false);
+    settings.setAllowContentAccess(false);
+
+    webView.setWebChromeClient(
+        new KolibriWebChromeClient(this, fullscreenContainer) {
+          @Override
+          public boolean onShowFileChooser(
+              WebView wv, ValueCallback<Uri[]> callback, WebChromeClient.FileChooserParams params) {
+            if (pendingFilePickerCallback != null) {
+              pendingFilePickerCallback.onReceiveValue(null);
+            }
+            pendingFilePickerCallback = callback;
+            filePickerLauncher.launch(FileChooserUtils.toPickerMimeTypes(params.getAcceptTypes()));
+            return true;
+          }
+        });
+
+    bridge = new KolibriJavascriptBridge(this, webView);
+    webView.addJavascriptInterface(bridge, "Kolibri");
+
+    webView.setWebViewClient(
+        new WebViewClient() {
+          @Override
+          public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+            Uri uri = request.getUrl();
+            String host = uri.getHost();
+            if (LOOPBACK_IP.equals(host) || LOCALHOST.equals(host)) {
+              return false;
+            }
+            try {
+              Intent intent = new Intent(Intent.ACTION_VIEW, uri);
+              startActivity(intent);
+            } catch (ActivityNotFoundException e) {
+              Log.e(TAG, "No activity found to handle URL: " + uri, e);
+            }
+            return true;
+          }
+
+          @Override
+          public void onPageStarted(WebView view, String url, Bitmap favicon) {
+            // Same-document (hash) navigations never reach here, so a route change cannot clear
+            // a load failure.
+            mainFrameLoadFailed = false;
+          }
+
+          @Override
+          public void onPageFinished(WebView view, String url) {
+            // Injecting from onPageStarted doesn't reliably land in the new document on older
+            // WebView builds (the script can still run against the outgoing page), which drops
+            // the download-name hook and loses filenames on blob: downloads. onPageFinished
+            // guarantees the new document is committed before the script runs.
+            view.evaluateJavascript(
+                "if (!window.__kolibriDownloadNameHook) {"
+                    + "window.__kolibriDownloadNameHook = true;"
+                    + "window.print = () => window.Kolibri.print();"
+                    + "document.addEventListener('click', function(e) {"
+                    + "var a = e.target.closest && e.target.closest('a[download]');"
+                    + "if (a) { window.Kolibri.notePendingDownloadName(a.getAttribute('download')); }"
+                    + "}, true);"
+                    + "}",
+                null);
+            if (shouldClearHistory) {
+              view.clearHistory();
+              shouldClearHistory = false;
+            }
+            // Hide splash when a real localhost page finishes loading
+            if (url != null && !url.startsWith("data:")) {
+              hideSplash();
+            }
+            String restoreUrl = WebViewLocation.restoreUrlFor(url, pendingRestoreLocation);
+            pendingRestoreLocation = null;
+            // Saved before the restore is injected: doUpdateVisitedHistory firing for a
+            // script-initiated hash navigation is not a documented guarantee.
+            WebViewLocation.save(WebViewActivity.this, restoreUrl == null ? url : restoreUrl);
+            if (restoreUrl != null) {
+              // location.replace, not loadUrl: a hash-only load pushes a history entry, so the
+              // first Back would land on the default route this page opened at.
+              // Guarded on the live location, which `url` cannot speak for: the page's router may
+              // reach the saved route between this load finishing and the script running, and
+              // replacing a route with itself makes vue-router reject the navigation.
+              String quoted = JSONObject.quote(restoreUrl);
+              view.evaluateJavascript(
+                  "if (location.href !== " + quoted + ") location.replace(" + quoted + ");", null);
+            }
+          }
+
+          @Override
+          public void onReceivedError(
+              WebView view, WebResourceRequest request, WebResourceError error) {
+            if (request.isForMainFrame()) {
+              mainFrameLoadFailed = true;
+            }
+          }
+
+          @Override
+          public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
+            // Kolibri's router is in hash mode: route changes are same-document and never reach
+            // onPageFinished.
+            WebViewLocation.save(WebViewActivity.this, url);
+          }
+        });
+
+    webView.setDownloadListener(this::handleDownload);
+  }
+
+  /** Copying takes as long as the file is big, so it happens off the UI thread. */
+  private void deliverPickedFile(ValueCallback<Uri[]> callback, Uri picked) {
+    fileExecutor.execute(
+        () -> {
+          Uri copy = PickedFiles.copyToPrivateCache(this, picked);
+          runOnUiThread(() -> callback.onReceiveValue(copy == null ? null : new Uri[] {copy}));
+        });
+  }
+
+  private void handleDownload(
+      String url,
+      String userAgent,
+      String contentDisposition,
+      String mimetype,
+      long contentLength) {
+    Uri uri = Uri.parse(url);
+    String scheme = uri.getScheme();
+    boolean inPage = "blob".equals(scheme) || "data".equals(scheme);
+    if (!inPage && !"http".equals(scheme) && !"https".equals(scheme)) {
+      Log.w(TAG, "Unsupported download scheme, skipping: " + url);
+      return;
+    }
+    String filename = resolveFilename(url, contentDisposition, mimetype);
+    bridge.announceDownloadStarted(filename);
+    if (inPage) {
+      saveBlobDownload(url, filename, mimetype);
+      return;
+    }
+    String cookie = CookieManager.getInstance().getCookie(url);
+    fileExecutor.execute(() -> bridge.downloadHttp(url, userAgent, cookie, filename, mimetype));
+  }
+
+  /**
+   * Prefers the filename captured from the triggering {@code <a download>} click — the
+   * DownloadListener callback isn't passed it, and for blob: URLs {@link URLUtil#guessFileName}
+   * falls back to the blob URL's UUID.
+   */
+  private String resolveFilename(String url, String contentDisposition, String mimetype) {
+    String pending = bridge.consumePendingDownloadFilename();
+    if (pending != null && !pending.isEmpty()) {
+      return pending;
+    }
+    return URLUtil.guessFileName(url, contentDisposition, mimetype);
+  }
+
+  /**
+   * blob:/data: URLs only exist in the renderer's memory, so they can't be fetched from native code
+   * directly. Fetch and base64-encode the content in JS, then hand it to the native bridge to write
+   * out — the same MediaStore-backed path used for http(s) downloads.
+   */
+  private void saveBlobDownload(String url, String filename, String mimetype) {
+    String quotedFilename = JSONObject.quote(filename);
+    String script =
+        "fetch("
+            + JSONObject.quote(url)
+            + ").then(function(r) { return r.blob(); }).then(function(blob) {"
+            + "var reader = new FileReader();"
+            + "reader.onload = function() {"
+            + "var result = reader.result;"
+            + "var base64 = result.substring(result.indexOf(',') + 1);"
+            + "Kolibri.saveBlob(base64, "
+            + quotedFilename
+            + ", blob.type || "
+            + JSONObject.quote(mimetype)
+            + ");"
+            + "};"
+            + "reader.onerror = function() { Kolibri.notifyBlobDownloadFailed("
+            + quotedFilename
+            + "); };"
+            + "reader.readAsDataURL(blob);"
+            + "}).catch(function() { Kolibri.notifyBlobDownloadFailed("
+            + quotedFilename
+            + "); });";
+    webView.evaluateJavascript(script, null);
+  }
+
+  private void loadKolibri() {
+    Log.d(TAG, "Loading Kolibri");
+
+    // Start server service
+    Intent serverIntent = new Intent(this, KolibriServerService.class);
+    startService(serverIntent);
+
+    // Observe server readiness from singleton
+    // Note: Using getInstance() not ViewModelProvider to ensure we observe
+    // the same instance that Python updates via setServerReady()
+    KolibriServerViewModel viewModel = KolibriServerViewModel.getInstance();
+
+    viewModel
+        .getServerReadyLiveData()
+        .observe(
+            this,
+            ready -> {
+              // A foregrounded page is left running; only onStop freezes it.
+              if (!ready) {
+                return;
+              }
+              // Resume before loading — loadUrl on a paused WebView is not reliable.
+              resumeWebView();
+              loadInitializeUrl();
+            });
+  }
+
+  /** Builds the initialization URL on a background thread, because it calls Python. */
+  private void loadInitializeUrl() {
+    new Thread(
+            () -> {
+              // Reading the saved path hits SharedPreferences, so keep it off the UI thread too.
+              String savedLocation = WebViewLocation.getLastPath(this);
+              Log.d(TAG, "Server ready, restoring path: " + savedLocation);
+              String url =
+                  Python.getInstance()
+                      .getModule("main")
+                      .callAttr(
+                          "get_initialize_url", WebViewLocation.withoutFragment(savedLocation))
+                      .toString();
+              runOnUiThread(() -> loadIfOriginChanged(url, savedLocation));
+            })
+        .start();
+  }
+
+  /**
+   * Keeps the live page when the server came back on its old port: {@code url} is the initialize
+   * URL on the new port, so an unchanged origin means the page is still good. A page that failed to
+   * load is the WebView's error page, and is reloaded.
+   *
+   * @param restoreLocation the saved location whose fragment this load should put back, dropped
+   *     along with the load when the live page is kept
+   */
+  @VisibleForTesting
+  void loadIfOriginChanged(String url, String restoreLocation) {
+    if (webView == null) {
+      return;
+    }
+    if (!mainFrameLoadFailed && WebViewLocation.isSameOrigin(webView.getUrl(), url)) {
+      Log.d(TAG, "Server came back on the same origin; leaving the page in place");
+      return;
+    }
+    shouldClearHistory = true;
+    pendingRestoreLocation = restoreLocation;
+    WebViewLocation.noteInitializeUrl(url);
+    webView.loadUrl(url);
+  }
+
+  /** Hide the splash screen */
+  private void hideSplash() {
+    if (splashContainer != null && splashContainer.getVisibility() == View.VISIBLE) {
+      splashContainer.setVisibility(View.GONE);
+    }
+  }
+
+  @Override
+  protected void onDestroy() {
+    super.onDestroy();
+
+    // Destroy WebView
+    if (webView != null) {
+      webView.destroy();
+      webView = null;
+    }
+    fileExecutor.shutdown();
+  }
+}

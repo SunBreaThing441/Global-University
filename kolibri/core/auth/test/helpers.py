@@ -1,0 +1,267 @@
+"""
+Helper functions for use across the user/auth/permission-related tests.
+"""
+
+import json
+import uuid
+
+from django.core.cache import caches
+from django.core.cache.backends.base import InvalidCacheBackendError
+from django.utils import timezone
+from morango.constants import transfer_stages
+from morango.models.certificates import Certificate
+from morango.models.certificates import Key
+from morango.models.certificates import ScopeDefinition
+from morango.models.core import Store
+from morango.models.core import SyncSession
+from morango.models.core import TransferSession
+from morango.sync.context import LocalSessionContext
+from rest_framework.test import APIClient
+from rest_framework.test import APITestCase
+from rest_framework.test import APITransactionTestCase
+
+from kolibri.core.auth.constants import role_kinds
+from kolibri.core.auth.constants.morango_sync import PROFILE_FACILITY_DATA
+from kolibri.core.auth.constants.morango_sync import ScopeDefinitions
+from kolibri.core.auth.sync_operations import KolibriSyncOperations
+from kolibri.core.device.models import clear_device_settings_memo
+from kolibri.core.device.models import DevicePermissions
+from kolibri.core.device.utils import provision_device as _provision_device
+
+from ..models import Classroom
+from ..models import Facility
+from ..models import FacilityDataset
+from ..models import FacilityUser
+from ..models import LearnerGroup
+
+DUMMY_PASSWORD = "password"
+
+
+def clear_process_cache():
+    clear_device_settings_memo()
+    try:
+        process_cache = caches["process_cache"]
+        process_cache.clear()
+    except InvalidCacheBackendError:
+        pass
+
+
+def provision_device(*args, **kwargs):
+    clear_process_cache()
+    return _provision_device(*args, **kwargs)
+
+
+def create_superuser(facility, username="superuser"):
+    superuser = FacilityUser.objects.create(username=username, facility=facility)
+    superuser.set_password(DUMMY_PASSWORD)
+    superuser.save()
+    DevicePermissions.objects.create(user=superuser, is_superuser=True)
+    return superuser
+
+
+class KolibriAPIClient(APIClient):
+    """
+    Test API client that infers facility for username/password login when omitted.
+    """
+
+    def login(self, **credentials):
+        if "facility" not in credentials:
+            username = credentials.get("username")
+            password = credentials.get("password")
+            if username and password is not None:
+                candidates = FacilityUser.objects.filter(username__iexact=username)
+                for user in candidates:
+                    if user.check_password(password):
+                        credentials["facility"] = user.facility
+                        break
+        return super().login(**credentials)
+
+
+class KolibriAPITestCase(APITestCase):
+    client_class = KolibriAPIClient
+
+
+class KolibriAPITransactionTestCase(APITransactionTestCase):
+    client_class = KolibriAPIClient
+
+
+def setup_device():
+    # Test helper to return a facility and superuser
+    facility = Facility.objects.create(name="Test")
+    superuser = create_superuser(facility)
+    provision_device()
+    return facility, superuser
+
+
+def enable_picture_password(facility):
+    dataset = facility.dataset
+    dataset.learner_can_login_with_no_password = True
+    dataset.learner_can_edit_password = False
+    dataset.picture_password_settings = {
+        "icon_style": "standard",
+        "show_icon_text": True,
+    }
+    dataset.save()
+
+
+def disable_picture_password(facility, passwordless=False):
+    dataset = facility.dataset
+    dataset.learner_can_login_with_no_password = passwordless
+    dataset.learner_can_edit_password = not passwordless
+    dataset.picture_password_settings = None
+    dataset.save()
+
+
+def receive_single_user_sync(user, saved=(), deleted=()):
+    """
+    Runs the cleanup stage of a pull by the learner-only device of `user`, as if it had
+    deserialized `saved` and `deleted`
+
+    :param saved: syncable models already saved locally
+    :param deleted: syncable models the pull deletes
+    """
+    root_cert = Certificate.objects.get(id=user.dataset_id)
+    scope_definition = ScopeDefinition.retrieve_by_id(ScopeDefinitions.SINGLE_USER)
+    user_cert = Certificate(
+        parent=root_cert,
+        profile=PROFILE_FACILITY_DATA,
+        scope_definition=scope_definition,
+        scope_version=scope_definition.version,
+        scope_params=json.dumps({"dataset_id": user.dataset_id, "user_id": user.id}),
+        private_key=Key(),
+    )
+    user_cert.id = user_cert.calculate_uuid()
+    root_cert.sign_certificate(user_cert)
+    user_cert.save()
+
+    transfer_session = TransferSession.objects.create(
+        id=uuid.uuid4().hex,
+        sync_session=SyncSession.objects.create(
+            id=uuid.uuid4().hex,
+            client_certificate=user_cert,
+            server_certificate=root_cert,
+            profile=PROFILE_FACILITY_DATA,
+            connection_kind="network",
+            last_activity_timestamp=timezone.now(),
+        ),
+        filter=str(user_cert.get_scope().read_filter),
+        push=False,
+        last_activity_timestamp=timezone.now(),
+        transfer_stage=transfer_stages.CLEANUP,
+    )
+
+    for model, is_deleted in [(m, False) for m in saved] + [(m, True) for m in deleted]:
+        store, _ = Store.objects.update_or_create(
+            id=model.id,
+            defaults={
+                "profile": PROFILE_FACILITY_DATA,
+                "serialized": "" if is_deleted else json.dumps(model.serialize()),
+                "deleted": is_deleted,
+                "last_saved_instance": uuid.uuid4().hex,
+                "last_saved_counter": 1,
+                "partition": model.calculate_partition(),
+                "source_id": model.calculate_source_id(),
+                "model_name": model.morango_model_name,
+                "deserialization_error": None,
+                "last_transfer_session_id": transfer_session.id,
+            },
+        )
+        if is_deleted:
+            store._deserialize_store_model({})
+
+    KolibriSyncOperations().handle(
+        LocalSessionContext(transfer_session=transfer_session)
+    )
+
+
+def create_dummy_facility_data(
+    allow_sign_ups=False, classroom_count=2, learnergroup_count=2
+):
+    """
+    Helper to bootstrap facility data for use in role/permission scenarios (collections, users, and roles).
+    This can be called multiple times to create parallel facilities/datasets in the same database, to test
+    cross-dataset permissions. Returns a dict containing objects and lists of objects that were created.
+
+    :param int classroom_count: (optional), the number of classrooms to create in the facility (defaults to 2)
+    :param int learnergroup_count: (optional), the number of learner groups to create in each classroom (defaults to 2)
+    :returns: a dictionary of objects (users, collections, etc) for a dummy facility
+    :rtype: dict
+    """
+
+    data = {}
+
+    # create the dataset object with which this data will be associated
+    dataset = data["dataset"] = FacilityDataset.objects.create(
+        learner_can_sign_up=allow_sign_ups
+    )
+
+    # create the Collection hierarchy
+    facility = data["facility"] = Facility.objects.create(dataset=dataset)
+    data["classrooms"] = [
+        Classroom.objects.create(parent=facility, name=f"classroom{i}")
+        for i in range(classroom_count)
+    ]
+    data["learnergroups"] = []
+    for classroom in data["classrooms"]:
+        lgs = [
+            LearnerGroup.objects.create(parent=classroom)
+            for i in range(learnergroup_count)
+        ]
+        data["learnergroups"].append(lgs)
+
+    # create the users
+    data["superuser"] = create_superuser(facility)
+    data["facility_admin"] = FacilityUser.objects.create(
+        username="facadmin", password="***", facility=facility
+    )
+    data["facility_coach"] = FacilityUser.objects.create(
+        username="faccoach", password="***", facility=facility
+    )
+    data["classroom_coaches"] = [
+        FacilityUser.objects.create(
+            username=f"classcoach{i}", password="***", facility=facility
+        )
+        for i, classroom in enumerate(data["classrooms"])
+    ]
+    data["learner_all_groups"] = FacilityUser.objects.create(
+        username="learnerag", password="***", facility=facility
+    )
+    for classroom in data["classrooms"]:
+        classroom.add_member(data["learner_all_groups"])
+
+    data["learners_one_group"] = []
+    for i, classroom_list in enumerate(data["learnergroups"]):
+        data["learners_one_group"].append([])
+        for j, group in enumerate(classroom_list):
+            learner = FacilityUser.objects.create(
+                username=f"learnerclass{i}group{j}",
+                password="***",
+                facility=facility,
+            )
+            data["learners_one_group"][i].append(learner)
+            group.get_classroom().add_member(learner)
+            group.add_learner(learner)
+            group.add_learner(data["learner_all_groups"])
+
+    data["unattached_users"] = [
+        FacilityUser.objects.create(
+            username=f"orphan{i}", password="*", facility=facility
+        )
+        for i in range(3)
+    ]
+
+    data["all_users"] = data["facility"].get_members()
+    data["all_collections"] = (
+        [data["facility"]]
+        + data["classrooms"]
+        + [group for groups in data["learnergroups"] for group in groups]
+    )
+
+    # create Roles linking users with Collections
+    facility.add_admin(data["facility_admin"])
+    facility.add_coach(data["facility_coach"])
+    for classroom, coach in zip(data["classrooms"], data["classroom_coaches"]):
+        classroom.add_coach(coach)
+        facility.add_role(coach, role_kinds.ASSIGNABLE_COACH)
+
+    return data

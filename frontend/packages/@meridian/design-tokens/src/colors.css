@@ -1,0 +1,103 @@
+:root {
+  /* ==========================================================================
+     Primitive Palette: Oceanic Cobalt, Geodetic Cyan, Solar Amber, Biome Emerald
+     ========================================================================== */
+  --mds-primitive-cobalt-950: #040D21;
+  --mds-primitive-cobalt-900: #071536;
+  --mds-primitive-cobalt-800: #0B2559; /* UNESCO Oceanic Cobalt */
+  --mds-primitive-cobalt-700: #14377A;
+  --mds-primitive-cobalt-600: #1E40AF;
+  --mds-primitive-cobalt-500: #3B82F6;
+  --mds-primitive-cobalt-400: #60A5FA;
+  --mds-primitive-cobalt-300: #93C5FD;
+
+  --mds-primitive-cyan-700: #0E7490;
+  --mds-primitive-cyan-600: #0891B2;
+  --mds-primitive-cyan-500: #06B6D4;
+  --mds-primitive-cyan-400: #00B4D8;   /* Geodetic Cyan */
+  --mds-primitive-cyan-300: #38BDF8;
+
+  --mds-primitive-amber-700: #B45309;
+  --mds-primitive-amber-600: #D97706;  /* UNESCO Solar Amber */
+  --mds-primitive-amber-500: #F59E0B;
+  --mds-primitive-amber-400: #FBBF24;
+
+  --mds-primitive-emerald-700: #047857;
+  --mds-primitive-emerald-600: #059669; /* Biome Emerald */
+  --mds-primitive-emerald-500: #10B981;
+
+  --mds-primitive-coral-700: #B91C1C;
+  --mds-primitive-coral-600: #DC2626;   /* Pulse Coral */
+  --mds-primitive-coral-500: #EF4444;
+
+  /* ==========================================================================
+     LIGHT THEME: Architectural Meridian Sandstone
+     ========================================================================== */
+  --mds-color-surface-ground: #F8F9FA;
+  --mds-color-surface-base: #FFFFFF;
+  --mds-color-surface-elevated: #F1F3F5;
+  --mds-color-surface-glass: rgba(255, 255, 255, 0.85);
+  --mds-color-surface-glass-border: rgba(206, 212, 218, 0.85);
+
+  --mds-color-brand-primary: var(--mds-primitive-cobalt-800);
+  --mds-color-brand-secondary: var(--mds-primitive-cyan-700);
+  --mds-color-brand-accent: var(--mds-primitive-amber-600);
+
+  --mds-color-text-primary: #0F172A;
+  --mds-color-text-secondary: #475569;
+  --mds-color-text-tertiary: #94A3B8;
+  --mds-color-text-inverse: #FFFFFF;
+
+  --mds-color-border-subtle: #E2E8F0;
+  --mds-color-border-strong: #CBD5E1;
+
+  --mds-color-status-success: var(--mds-primitive-emerald-600);
+  --mds-color-status-warning: var(--mds-primitive-amber-600);
+  --mds-color-status-error: var(--mds-primitive-coral-600);
+  --mds-color-status-mesh: #4338CA;
+}
+
+[data-theme="dark"] {
+  /* ==========================================================================
+     DARK THEME: Deep Space Geodesic Observatory
+     ========================================================================== */
+  --mds-color-surface-ground: #070B14;
+  --mds-color-surface-base: #0D1527;
+  --mds-color-surface-elevated: #15223D;
+  --mds-color-surface-glass: rgba(13, 21, 39, 0.82);
+  --mds-color-surface-glass-border: rgba(30, 48, 86, 0.85);
+
+  --mds-color-brand-primary: var(--mds-primitive-cobalt-500);
+  --mds-color-brand-secondary: var(--mds-primitive-cyan-400);
+  --mds-color-brand-accent: var(--mds-primitive-amber-500);
+
+  --mds-color-text-primary: #F8FAFC;
+  --mds-color-text-secondary: #94A3B8;
+  --mds-color-text-tertiary: #64748B;
+  --mds-color-text-inverse: #070B14;
+
+  --mds-color-border-subtle: #1E3056;
+  --mds-color-border-strong: #2A4374;
+
+  --mds-color-status-success: var(--mds-primitive-emerald-500);
+  --mds-color-status-warning: var(--mds-primitive-amber-500);
+  --mds-color-status-error: var(--mds-primitive-coral-500);
+  --mds-color-status-mesh: #818CF8;
+}
+
+/* ==========================================================================
+   FIELD RESILIENCE: High-Contrast Sunlight Mode for Rugged Field Tablets
+   ========================================================================== */
+[data-contrast="high-sunlight"] {
+  --mds-color-surface-ground: #FFFFFF !important;
+  --mds-color-surface-base: #FFFFFF !important;
+  --mds-color-surface-elevated: #F4F4F4 !important;
+  --mds-color-text-primary: #000000 !important;
+  --mds-color-text-secondary: #000000 !important;
+  --mds-color-text-tertiary: #333333 !important;
+  --mds-color-border-subtle: #000000 !important;
+  --mds-color-border-strong: #000000 !important;
+  --mds-color-brand-primary: #000080 !important;
+  --mds-color-brand-secondary: #005577 !important;
+  --mds-color-brand-accent: #884400 !important;
+}

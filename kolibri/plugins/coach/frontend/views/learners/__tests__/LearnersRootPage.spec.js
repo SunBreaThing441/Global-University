@@ -1,0 +1,111 @@
+import { nextTick } from 'vue';
+import { render, screen, within } from '@testing-library/vue';
+import '@testing-library/jest-dom';
+import useUser, { useUserMock } from 'kolibri/composables/useUser'; // eslint-disable-line import-x/named
+import { picturePasswordStrings } from 'kolibri-common/strings/picturePasswords';
+import { emulatePrintMedia, selectKSelectOption } from 'testUtils'; // eslint-disable-line
+import { coachStrings } from '../../common/commonCoachStrings';
+import makeStore from '../../../__tests__/utils/makeStore';
+import LearnersRootPage from '../LearnersRootPage.vue';
+
+const { viewPasswordsAction$ } = picturePasswordStrings;
+const { recipientsLabel$, learnersLabel$ } = coachStrings;
+
+const CLASS_NAME = 'Class A';
+
+jest.mock('kolibri-common/composables/usePageLoading');
+jest.mock('kolibri/composables/useUser');
+jest.mock('../../../composables/fetchClassSyncStatus');
+jest.mock('kolibri/urls');
+jest.mock('kolibri/router', () => ({
+  getRoute: jest.fn((name, params) => ({ name, params })),
+  getReactiveRoute: jest.fn(() => ({ params: {} })),
+}));
+
+const routes = [
+  { path: '/test', name: 'test' },
+  { path: '/passwords', name: 'LEARNER_PASSWORDS' },
+  { path: '/learner', name: 'LEARNER_SUMMARY' },
+];
+
+const MOCK_LEARNER = { id: 'learner-1', name: 'Learner One', username: 'learner1' };
+const GROUP = { id: 'group-a', name: 'Group A', member_ids: [MOCK_LEARNER.id] };
+
+function renderComponent({ picturePasswordSettings, learners = [], groups = [], className } = {}) {
+  const store = makeStore();
+  store.state.classSummary.name = className;
+  const learnerMap = {};
+  learners.forEach(l => {
+    learnerMap[l.id] = l;
+  });
+  store.state.classSummary.learnerMap = learnerMap;
+  store.state.classSummary.groupMap = Object.fromEntries(groups.map(group => [group.id, group]));
+  store.state.classSummary.picture_password_settings = picturePasswordSettings;
+  return render(LearnersRootPage, { store, routes });
+}
+
+describe('LearnersRootPage', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    useUser.mockImplementation(() => useUserMock({ isCoach: true }));
+  });
+
+  describe('page title', () => {
+    it('sets the tab title to the learners label and class name', async () => {
+      renderComponent({ className: CLASS_NAME });
+      await nextTick();
+      expect(document.title).toBe(`${learnersLabel$()} - ${CLASS_NAME} - Kolibri`);
+    });
+
+    it('renders its visible header as the only h1', async () => {
+      renderComponent({ className: CLASS_NAME });
+      await nextTick();
+      const headings = screen.queryAllByRole('heading', { level: 1 });
+      expect(headings).toHaveLength(1);
+      expect(headings[0]).toHaveTextContent(learnersLabel$());
+    });
+  });
+
+  describe('"View Passwords" button conditional rendering', () => {
+    it('does not render when picture_password_settings is null', () => {
+      renderComponent({ picturePasswordSettings: null, learners: [MOCK_LEARNER] });
+      expect(screen.queryByRole('link', { name: viewPasswordsAction$() })).not.toBeInTheDocument();
+    });
+
+    it('does not render when picture_password_settings is undefined', () => {
+      renderComponent({ picturePasswordSettings: undefined, learners: [MOCK_LEARNER] });
+      expect(screen.queryByRole('link', { name: viewPasswordsAction$() })).not.toBeInTheDocument();
+    });
+
+    it('does not render when picture_password_settings is set but class has no learners', () => {
+      renderComponent({ picturePasswordSettings: { enabled: true }, learners: [] });
+      expect(screen.queryByRole('link', { name: viewPasswordsAction$() })).not.toBeInTheDocument();
+    });
+
+    it('renders when picture_password_settings is set and class has learners', () => {
+      renderComponent({ picturePasswordSettings: { enabled: true }, learners: [MOCK_LEARNER] });
+      expect(screen.getByRole('link', { name: viewPasswordsAction$() })).toBeInTheDocument();
+    });
+  });
+
+  describe('when printing', () => {
+    emulatePrintMedia(beforeEach, afterEach);
+
+    it('hides the "View passwords" button and the recipients filter', () => {
+      renderComponent({ picturePasswordSettings: { enabled: true }, learners: [MOCK_LEARNER] });
+      expect(screen.queryByRole('link', { name: viewPasswordsAction$() })).not.toBeInTheDocument();
+      expect(
+        screen.getByText(recipientsLabel$(), { selector: '.ui-select-label-text' }),
+      ).not.toBeVisible();
+    });
+
+    it('prints the selected recipients', async () => {
+      renderComponent({ learners: [MOCK_LEARNER], groups: [GROUP] });
+      await selectKSelectOption(recipientsLabel$(), GROUP.name);
+
+      const printedFilters = within(screen.getByTestId('printed-filters'));
+      expect(printedFilters.getByText(recipientsLabel$())).toBeInTheDocument();
+      expect(printedFilters.getByText(GROUP.name)).toBeInTheDocument();
+    });
+  });
+});

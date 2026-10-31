@@ -1,0 +1,8 @@
+{
+  "name": "@meridian/design-tokens",
+  "version": "1.0.0",
+  "description": "Meridian Global Design System Tokens",
+  "main": "src/index.css",
+  "style": "src/index.css",
+  "license": "MIT"
+}

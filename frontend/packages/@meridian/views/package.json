@@ -1,0 +1,16 @@
+{
+  "name": "@meridian/views",
+  "version": "1.0.0",
+  "description": "Meridian Global dynamic views and pages",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "dependencies": {
+    "@meridian/components": "workspace:*",
+    "@meridian/composables": "workspace:*",
+    "@meridian/auth": "workspace:*",
+    "@meridian/i18n": "workspace:*",
+    "vue": "^3.5.0",
+    "vue-router": "^4.4.0",
+    "axios": "^1.7.0"
+  }
+}

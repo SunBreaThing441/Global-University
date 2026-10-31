@@ -1,0 +1,57 @@
+import { fireEvent, screen } from '@testing-library/vue';
+import globalThemeState from 'kolibri-design-system/lib/styles/globalThemeState';
+
+// Run `fn` with console.error silenced.  Used to suppress jsdom's
+// "Not implemented: navigation" error which fires whenever code
+// assigns to window.location (non-configurable in modern jsdom).
+function withSilentConsoleError(fn) {
+  const orig = console.error; // eslint-disable-line no-console
+  console.error = () => {}; // eslint-disable-line no-console
+  try {
+    fn();
+  } finally {
+    console.error = orig; // eslint-disable-line no-console
+  }
+}
+
+// Add this to the beginning of a test suite to avoid 'not implemented: navigation'
+// errors from JSDOM
+export function stubWindowLocation(beforeAll, afterAll) {
+  const originalLocation = window.location;
+
+  beforeAll(() => {
+    withSilentConsoleError(() => {
+      delete window.location;
+      window.location = {
+        href: '',
+        pathname: '',
+      };
+    });
+  });
+
+  afterAll(() => {
+    withSilentConsoleError(() => {
+      window.location = originalLocation;
+    });
+  });
+}
+
+// `$isPrint` reads this, and KDS's `$print()` sets it the same way.
+// jsdom never matches print media.
+export function emulatePrintMedia(beforeEach, afterEach) {
+  beforeEach(() => {
+    globalThemeState.mediaType = 'print';
+  });
+  afterEach(() => {
+    globalThemeState.mediaType = null;
+  });
+}
+
+// Every KSelect keeps its option list in the DOM, so `option` must be unique
+// across the page's selects. Other page text with the same wording is ignored.
+export async function selectKSelectOption(label, option) {
+  await fireEvent.click(
+    screen.getByText(label, { selector: '.ui-select-label-text' }).closest('.ui-select-label'),
+  );
+  await fireEvent.click(await screen.findByText(option, { selector: '.ui-select-option-basic' }));
+}

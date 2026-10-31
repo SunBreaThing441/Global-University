@@ -1,0 +1,25 @@
+:root {
+  /* ==========================================================================
+     Glassmorphism & Depth Elevation Tokens
+     ========================================================================== */
+  --mds-elevation-shadow-sm: 0 1px 3px rgba(11, 37, 89, 0.06), 0 1px 2px rgba(11, 37, 89, 0.04);
+  --mds-elevation-shadow-md: 0 4px 12px rgba(11, 37, 89, 0.08), 0 2px 4px rgba(11, 37, 89, 0.04);
+  --mds-elevation-shadow-lg: 0 12px 28px rgba(11, 37, 89, 0.10), 0 4px 8px rgba(11, 37, 89, 0.04);
+  --mds-elevation-shadow-xl: 0 24px 48px rgba(11, 37, 89, 0.14), 0 8px 16px rgba(11, 37, 89, 0.06);
+
+  --mds-glass-blur-sm: blur(8px);
+  --mds-glass-blur-md: blur(16px);
+  --mds-glass-blur-lg: blur(24px);
+
+  --mds-glow-brand: 0 0 20px rgba(0, 180, 216, 0.25);
+  --mds-glow-solar: 0 0 20px rgba(245, 158, 11, 0.25);
+}
+
+[data-theme="dark"] {
+  --mds-elevation-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --mds-elevation-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --mds-elevation-shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.6);
+  --mds-elevation-shadow-xl: 0 24px 56px rgba(0, 0, 0, 0.7);
+
+  --mds-glow-brand: 0 0 24px rgba(6, 182, 212, 0.35);
+}

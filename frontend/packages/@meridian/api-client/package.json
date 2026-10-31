@@ -1,0 +1,13 @@
+{
+  "name": "@meridian/api-client",
+  "version": "1.0.0",
+  "description": "Meridian Global Type-Safe Resource Client",
+  "main": "src/index.ts",
+  "module": "src/index.ts",
+  "types": "src/index.ts",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.7.9",
+    "qs": "^6.13.0"
+  }
+}

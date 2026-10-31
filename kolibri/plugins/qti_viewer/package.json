@@ -1,0 +1,22 @@
+{
+  "version": "0.1.0",
+  "name": "kolibri-qti-viewer",
+  "description": "A plugin for rendering QTI questions",
+  "private": true,
+  "dependencies": {
+    "@vueuse/core": "catalog:",
+    "kolibri": "workspace:*",
+    "kolibri-common": "workspace:*",
+    "kolibri-design-system": "catalog:",
+    "kolibri-logging": "workspace:*",
+    "kolibri-viewer": "workspace:*",
+    "kolibri-zip": "workspace:*",
+    "lodash": "catalog:",
+    "vue": "catalog:",
+    "web-streams-polyfill": "catalog:",
+    "xspattern": "3.1.0"
+  },
+  "devDependencies": {
+    "@testing-library/vue": "catalog:"
+  }
+}

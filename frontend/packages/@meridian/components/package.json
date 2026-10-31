@@ -1,0 +1,14 @@
+{
+  "name": "@meridian/components",
+  "version": "1.0.0",
+  "description": "Meridian Design System (MDS) Modern Vue 3 Components",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "dependencies": {
+    "@meridian/design-tokens": "workspace:*",
+    "@meridian/i18n": "workspace:*",
+    "@meridian/auth": "workspace:*",
+    "vue": "^3.5.0",
+    "vue-router": "^4.4.0"
+  }
+}

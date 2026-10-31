@@ -1,0 +1,94 @@
+.PHONY: help changelog error-pages release deb dist sign-and-upload orig \
+       setup-ppa install-build-deps install-upload-deps install-kolibri
+
+# Auto-detect sudo: empty in containers (root), "sudo" on dev machines
+SUDO := $(shell [ "$$(id -u)" = "0" ] && echo "" || echo "sudo")
+# apt bounds a single stalled connection but never its own total runtime, so an
+# unresponsive mirror holds a CI build open for hours instead of failing it.
+APT_OPTS := -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30
+APT_TIMEOUT := timeout 600
+APT_UPDATE := $(APT_TIMEOUT) $(SUDO) apt-get $(APT_OPTS) update
+APT_INSTALL := $(APT_TIMEOUT) $(SUDO) apt-get $(APT_OPTS) install -y
+
+help:
+	@echo "changelog          - prepare debian/changelog file with the new version number"
+	@echo "error-pages        - use kolibri command to create all the error pages and its translations"
+	@echo "release            - prepare a release"
+	@echo "dist               - package"
+	@echo "orig               - creates ../kolibri-server_n.n.n.orig.tar.gz"
+	@echo "setup-ppa          - add Learning Equality PPA"
+	@echo "install-build-deps - install devscripts, debhelper, dpkg-dev"
+	@echo "install-upload-deps- install build deps + dput, python3-launchpadlib"
+	@echo "install-kolibri    - preseed debconf and install kolibri from PPA"
+	@echo $(shell dpkg-parsechangelog -SVersion)
+
+setup-ppa:
+	$(APT_INSTALL) gpg
+	./test/setup_ppa.sh
+
+install-build-deps:
+	$(APT_UPDATE)
+	$(APT_INSTALL) build-essential devscripts debhelper dpkg-dev distro-info-data
+
+install-upload-deps: install-build-deps
+	$(APT_INSTALL) dput python3-launchpadlib
+
+install-kolibri: setup-ppa
+	echo "kolibri kolibri/init boolean false" | $(SUDO) debconf-set-selections
+	echo "kolibri kolibri/user string kolibri" | $(SUDO) debconf-set-selections
+	$(APT_UPDATE)
+	$(APT_INSTALL) kolibri
+
+error-pages:
+	rm -Rf $(CURDIR)/error_pages
+	kolibri manage loadingpage --reload --output-dir $(CURDIR)/error_pages --version-text $(shell dpkg-parsechangelog -SVersion)
+
+# Generate debian/changelog with the .deb version bound to the Kolibri version.
+# Set KOLIBRI_VERSION=<pep440> to pin it, else it is read from the workspace kolibri.
+# The generator prepends, so start from the committed changelog each run.
+changelog:
+	git show HEAD:./debian/changelog > debian/changelog
+	version="$${KOLIBRI_VERSION:-$$(uv run python -c 'import kolibri; print(kolibri.__version__)')}" && \
+	echo "$$version" | uv run --package kolibri-installer-debian python ../debian/build_tools/generate_changelog.py --package kolibri-server --version-file /dev/stdin
+
+release: changelog  error-pages orig
+
+# Extra dpkg-buildpackage flags. The PR CI build passes -d to skip the Debian
+# build-dependency check, since it builds against the workspace Kolibri (resolved
+# by uv) rather than an apt-installed kolibri package. Empty by default.
+DPKG_BUILDPACKAGE_FLAGS ?=
+deb: changelog error-pages orig
+	dpkg-buildpackage -b -us -uc $(DPKG_BUILDPACKAGE_FLAGS)
+
+dist: error-pages orig
+	@mkdir -p dist
+	echo "Building unsigned package..."
+	dpkg-buildpackage -S -us -uc
+	mv ../kolibri-server_$(VERSION)* dist/
+	@echo "Package built successfully!"
+# build and sign (signing uses environment GPG_KEY_ID and GPG_PASSPHRASE)
+sign-and-upload: dist
+	@echo "Signing and uploading package..."
+	@test -n "$$GPG_KEY_ID" || { echo "Error: GPG_KEY_ID is not set"; exit 1; }
+	@test -n "$$GPG_PASSPHRASE" || { echo "Error: GPG_PASSPHRASE is not set"; exit 1; }
+	@printf '%s' "$$GPG_PASSPHRASE" > /tmp/.gpg-passphrase
+	debsign -p"gpg --batch --pinentry-mode loopback --passphrase-file /tmp/.gpg-passphrase" \
+		-k "$$GPG_KEY_ID" dist/*.changes
+	@rm -f /tmp/.gpg-passphrase
+	@echo "Uploading to PPA..."
+	dput --unchecked ppa:learningequality/kolibri-proposed dist/*.changes
+	@echo "Upload completed successfully!"
+
+# Solution from: https://stackoverflow.com/a/43145972/405682
+VERSION:=$(shell dpkg-parsechangelog -S Version | sed -rne 's,([^-\+]+)+(\+dfsg)*.*,\1,p'i)
+UPSTREAM_PACKAGE:=kolibri-server_${VERSION}.orig.tar.gz
+# Single-source the cutover snippet from platforms/apt-repo so the postinst and
+# the debian package's later migration share one canonical copy. It must exist
+# before orig tars the directory, so hang it off orig rather than off each
+# packaging target.
+migrate-apt-source.sh: ../apt-repo/migrate-apt-source.sh
+	cp $< $@
+
+orig: migrate-apt-source.sh
+	@echo "Creating .orig tarball: ../${UPSTREAM_PACKAGE}"
+	@tar --exclude-from=.tarignore -czf ../${UPSTREAM_PACKAGE} -C .. $(notdir $(CURDIR))

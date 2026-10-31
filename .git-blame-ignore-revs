@@ -1,0 +1,59 @@
+# Run this command to always ignore formatting commits in `git blame`
+# git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# Applied black to the codebase
+7dadc107cebd3ab4597f1aa4f159940872466dec
+
+# Reformatted all frontend code using prettier v3
+42efde27bac137734f05057278c4827168d119f2
+
+# Migrated all frontend code from assets/src to frontend
+e59c54a53fe4305700d4ced05134ab95b7436b1e
+
+# Ruff and yamlfmt reformatting
+301b08fd04c464ca3b11b5b12a001db83c364b03
+
+# Reformatted imports after enabling ruff isort rules
+51b7e61d74714aed5d82555114066fb5cc4b814e
+
+# Ruff mechanical rewrites (UP026, then safe, unsafe and hand-applied fixes)
+a3e48446b8cfaf2582673fadd19d1abadb8cd543
+be52b3082e064e767f75b0e3d2a81e2bf800974c
+91eb648e35946c164ace36be2e9288f4fee9b9cf
+b3dd77a131224e779d3cce2b579aaf82157f9116
+570f7d9720cf42c67adc5d3d0c8f9cae0cc03be8
+e602393bf2b36cab1701a31d907c49552c92fb04
+
+# Ruff logging rewrites (G, LOG)
+66168444cc45f3ac14a88aedff7e4a3d0bb16c2b
+67c05f93eaee9a925a45d598f9f908c5c0bbc72b
+
+# Ruff f-string rewrites (UP031, UP032)
+31b591f22296f55955a25f890c3f805f5bad7d73
+6b0493c2ddab088b852de00c5d4e651b594685f9
+02bc6ba62718d4cad91f782bf40a5cac0491b3d4
+
+# Ruff bugbear and Ruff-rule rewrites (B, RUF)
+12e87cd33f77276d26ea578e02520f2498234555
+ccb1acd0ec5d00c73bff5f4e140bdd2d0eefd3c1
+f1ddcaf76f14b1252bf7579a6a07e4d7a88e6ae8
+b9ed1240d11b14466317b0e6949686464e1017f9
+bb6436609d168e0b1ccd0f7ad2faa833ceecaa7e
+290b33162f3354e1362c4f3f88e0cc2f8ecddc4a
+
+# Ruff simplify rewrites (SIM)
+b6e6a1835534ca2eb23805839fb7e66e4bb464e9
+d63efd2fe7c78858d37f548c545547de7457b744
+f9648c3a4f1502eb500f4a49b80407e2978be1e7
+
+# Ruff import hoisting (PLC0415)
+11085cafd7a0374f3c8b4d569b6cd0fa9e7fd916
+
+# Theme accessors to CSS variables in inline styles
+f4f57bc29e78e1c185aa0430954d4e035f1da9ac
+2c468e8d19bcc712de47f28de13b5ce774a94b8b
+5e1c1bf13f61891f84ed776e46c1bfa1b8360110
+366861dee0449b2981c512694ed8e20147f5860c
+5e50285530172b1a0b68f0ce644cbb3349f22505
+b373715840d96ef91984a56a35e2c95ec63bcedd
+7c6f7580c5ab22414be8de3deca0a93eb527a85d
